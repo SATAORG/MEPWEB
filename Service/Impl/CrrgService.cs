@@ -35,9 +35,11 @@ namespace Mep01Web.Service.Impl
         private readonly ITbpnService _tbpnService;
         private readonly ITatvService _tatvService;
         private readonly IVsCommAperteXCliService _vsCommAperteXCliService;
+        private readonly ICrrgTwService _crrgTwService;
 
-        public CrrgService(SataconsultingContext dbContext, ICrrgValidator crrgValidator, IAcliService acliService, ITbcpService tbcpService, IOlcaService olcaService, IMvxpa01Service mvxpa01Service, ITbpnService tbpnService, ITatvService tatvService, IVsCommAperteXCliService vsCommAperteXCliService)
+        public CrrgService(SataconsultingContext dbContext, ICrrgValidator crrgValidator, IAcliService acliService, ITbcpService tbcpService, IOlcaService olcaService, IMvxpa01Service mvxpa01Service, ITbpnService tbpnService, ITatvService tatvService, IVsCommAperteXCliService vsCommAperteXCliService, ICrrgTwService crrgTwService)
         {
+            _crrgTwService = crrgTwService;
             _dbContext = dbContext;
             _crrgValidator = crrgValidator;
             _acliService = acliService;
@@ -195,11 +197,24 @@ namespace Mep01Web.Service.Impl
 
             var grpRes = await GetGrpCdlsAsync(grpCdlRequest);
 
+            if (crrgRequest.IsUpdate)
+            {
+                return await UpdateCrrgAsync(crrgRequest);
+            }
+
+            // Calcolo del nuovo CrrgCSrl, aggiornamento giorni ISL e inserimento nella stessa transazione:
+            // il lock preso da GetNuovoCrrgCSrlAsync resta fino al commit, così due inserimenti contemporanei
+            // non possono ottenere lo stesso numero. Se il chiamante (es. import Teamwork) ha già aperto una
+            // transazione si usa quella, e il commit lo fa lui.
+            await using var transazione = _dbContext.Database.CurrentTransaction == null
+                ? await _dbContext.Database.BeginTransactionAsync()
+                : null;
+
             //            tatv_residuo_gg
             //              tatv_residuo_gg_test
             //              tatv_stima_gg
             //                tatv_stima_gg_test
-            var m = _dbContext.FlussoCrrgs.Max(c => c.CrrgCSrl) + 1;
+            var m = await GetNuovoCrrgCSrlAsync();
             var crrgTmRunIncr = new Duration(crrgRequest.CrrgTmRunIncrHMS);
             var crrgTmRunIncrProd = new Duration(crrgRequest.CrrgTmRunIncrHMSProd);
             var hms = crrgTmRunIncr.GetSeconds();
@@ -290,21 +305,19 @@ namespace Mep01Web.Service.Impl
 
             };
 
-            if (crrgRequest.IsUpdate)
+            var diff = (decimal)hms / (3600 * 8);
+            if (crrgRequest.CrrgRifCliente != null && (crrgRequest.CrrgCCaus == "DELI" || crrgRequest.CrrgCCaus == "SVIL"))
             {
-                return await UpdateCrrgAsync(crrgRequest);
+                await _tatvService.UpdateTatvAsync(crrgRequest.CrrgRifCliente, crrgRequest.CrrgCCaus, diff);
             }
-            else
-            {
-                var diff = (decimal)hms / (3600 * 8);
-                if (crrgRequest.CrrgRifCliente != null && (crrgRequest.CrrgCCaus == "DELI" || crrgRequest.CrrgCCaus == "SVIL"))
-                {
-                    await _tatvService.UpdateTatvAsync(crrgRequest.CrrgRifCliente, crrgRequest.CrrgCCaus, diff);
-                }
-                _dbContext.FlussoCrrgs.Add(flussoCrrg);
-            }
+            _dbContext.FlussoCrrgs.Add(flussoCrrg);
 
             var affected = await _dbContext.SaveChangesAsync();
+
+            if (transazione != null)
+            {
+                await transazione.CommitAsync();
+            }
 
             var crrgResponse = new CrrgResponse();
             crrgResponse.FlussoCrrg = flussoCrrg;
@@ -313,6 +326,12 @@ namespace Mep01Web.Service.Impl
 
         public async Task<ResponseBase<CrrgResponse>?> UpdateCrrgAsync(CrrgCreateRequest crrgRequest)
         {
+            var bloccato = await VerificaModificaCollegatoTeamworkAsync(crrgRequest);
+            if (bloccato != null)
+            {
+                return bloccato;
+            }
+
             var grpCdlRequest = new CrrgGrpCdlsRequest
             {
                 CrrgCdl = crrgRequest.CrrgCdl,
@@ -380,6 +399,12 @@ namespace Mep01Web.Service.Impl
 
         public async Task<ResponseBase<CrrgResponse>?> DeleteCrrgAsync(CrrgCreateRequest crrgRequest)
         {
+            var bloccato = await VerificaCollegamentoTeamworkAsync(crrgRequest, "cancellato");
+            if (bloccato != null)
+            {
+                return bloccato;
+            }
+
             FlussoCrrg flussoCrrg = await _dbContext.FlussoCrrgs.SingleOrDefaultAsync(e => e.CrrgCSrl == crrgRequest.CrrgCSrl && e.CrrgCDitta == "01");
             if (flussoCrrg == null)
             {
@@ -398,6 +423,95 @@ namespace Mep01Web.Service.Impl
             var crrgResponse = new CrrgResponse();
             crrgResponse.FlussoCrrg = flussoCrrg;
             return ResponseBase<CrrgResponse?>.Success(crrgResponse);
+        }
+
+
+        /// <summary>
+        /// Nuovo CrrgCSrl = massimo attuale + 1, letto con UPDLOCK e HOLDLOCK: il lock sull'ultimo valore resta
+        /// fino alla fine della transazione, quindi un secondo inserimento contemporaneo aspetta e legge il
+        /// massimo aggiornato invece di ottenere lo stesso numero. Va chiamato dentro una transazione.
+        /// Resta compatibile con altri programmi che inseriscono in flusso_crrg calcolando anch'essi il massimo.
+        /// </summary>
+        private async Task<decimal> GetNuovoCrrgCSrlAsync()
+        {
+            var max = await _dbContext.Database
+                .SqlQueryRaw<decimal>("SELECT ISNULL(MAX(crrg_c_srl), 0) AS [Value] FROM dba.flusso_crrg WITH (UPDLOCK, HOLDLOCK)")
+                .SingleAsync();
+            return max + 1;
+        }
+
+
+        /// <summary>
+        /// [231009] Consuntivo collegato a una registrazione Teamwork (flusso_crrg_tw): i dati che arrivano da Teamwork
+        /// (risorsa, data, durata, commessa/ISL) si correggono solo su Teamwork e arrivano con l'allineamento.
+        /// Operazione, causale, macroattività, applicativo, modulo e note invece si possono modificare in MEPWEB.
+        /// Ritorna null se la modifica è consentita.
+        /// </summary>
+        private async Task<ResponseBase<CrrgResponse>?> VerificaModificaCollegatoTeamworkAsync(CrrgCreateRequest crrgRequest)
+        {
+            if (crrgRequest.DaAllineamentoTeamwork)
+            {
+                return null;
+            }
+
+            var collegamento = await _crrgTwService.GetByCrrgCSrlAsync(crrgRequest.CrrgCSrl);
+            if (collegamento == null)
+            {
+                return null;
+            }
+
+            var attuale = await _dbContext.FlussoCrrgs.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.CrrgCSrl == crrgRequest.CrrgCSrl && x.CrrgCDitta == "01");
+            if (attuale == null)
+            {
+                return null;
+            }
+
+            static string N(string? s) => (s ?? "").Trim().ToUpperInvariant();
+            var cambiati = new List<string>();
+            if (N(attuale.CrrgCRis) != N(crrgRequest.CrrgCRis))
+                cambiati.Add("risorsa");
+            if (attuale.CrrgDtt?.Date != crrgRequest.CrrgDtt.Date)
+                cambiati.Add("data");
+            if (attuale.CrrgTmRunIncr != new Duration(crrgRequest.CrrgTmRunIncrHMS).GetSeconds())
+                cambiati.Add("tempo");
+            if (N(attuale.CrrgRifCliente) != N(crrgRequest.CrrgRifCliente))
+                cambiati.Add("ISL");
+            if (N(attuale.CrrgTstDoc) != N(crrgRequest.CrrgTstDoc) || N(attuale.CrrgPrfDoc) != N(crrgRequest.CrrgPrfDoc)
+                || attuale.CrrgADoc != crrgRequest.CrrgADoc || attuale.CrrgNDoc != crrgRequest.CrrgNDoc)
+                cambiati.Add("commessa");
+
+            if (cambiati.Count == 0)
+            {
+                return null;
+            }
+
+            return ResponseBase<CrrgResponse?>.Failed(CrrgCreateErrors.CollegatoTeamwork,
+                $"Il consuntivo è collegato alla registrazione Teamwork {collegamento.TwTimelogId}: {string.Join(", ", cambiati)} " +
+                "si correggono su Teamwork e arrivano con l'allineamento dalla pagina Importa da Teamwork. " +
+                "In MEPWEB puoi modificare operazione, causale, macroattività, applicativo, modulo e note.");
+        }
+
+        /// <summary>
+        /// [231009] Un consuntivo collegato a una registrazione Teamwork (flusso_crrg_tw) non si cancella da MEPWEB:
+        /// la cancellazione passa dalla pagina Importa da Teamwork quando la registrazione è cancellata su Teamwork.
+        /// Ritorna null se l'operazione è consentita.
+        /// </summary>
+        private async Task<ResponseBase<CrrgResponse>?> VerificaCollegamentoTeamworkAsync(CrrgCreateRequest crrgRequest, string operazione)
+        {
+            if (crrgRequest.DaAllineamentoTeamwork)
+            {
+                return null;
+            }
+
+            var collegamento = await _crrgTwService.GetByCrrgCSrlAsync(crrgRequest.CrrgCSrl);
+            if (collegamento == null)
+            {
+                return null;
+            }
+
+            return ResponseBase<CrrgResponse?>.Failed(CrrgCreateErrors.CollegatoTeamwork,
+                $"Il consuntivo è collegato alla registrazione Teamwork {collegamento.TwTimelogId} e non può essere {operazione} in MEPWEB: correggi la registrazione su Teamwork e allinea dalla pagina di import.");
         }
 
 

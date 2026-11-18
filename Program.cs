@@ -60,7 +60,10 @@ namespace WebApplication2
 
 
             builder.Services.AddDbContext<SataconsultingContext>(options =>
-                 options.UseSqlServer(builder.Configuration.GetConnectionString("Main")));
+                 options.UseSqlServer(builder.Configuration.GetConnectionString("Main"),
+                     // Il DB è a livello di compatibilità 100 (SQL Server 2008): EF Core non deve generare
+                     // SQL con funzioni più recenti (OPENJSON, STRING_AGG, ...) non disponibili a quel livello
+                     sql => sql.UseCompatibilityLevel(100)));
             builder.Services.AddRazorPages();
             builder.Services.AddTransient<ICrrgService, CrrgService>();
             builder.Services.AddTransient<ICrrgValidator, CrrgValidator>();
@@ -81,6 +84,13 @@ namespace WebApplication2
             builder.Services.AddTransient<IMaccService, MaccService>();
             builder.Services.AddTransient<IQualificheService, QualificheService>();
             builder.Services.AddTransient<IPsc001AService, Psc001AService>();
+            builder.Services.AddTransient<ICrrgTwService, CrrgTwService>();
+
+            // [231009] Login Teamwork per utente
+            builder.Services.Configure<TeamworkOptions>(builder.Configuration.GetSection(TeamworkOptions.Sezione));
+            builder.Services.AddHttpClient<ITeamworkAuthService, TeamworkAuthService>(c => c.Timeout = TimeSpan.FromSeconds(30));
+            builder.Services.AddHttpClient<ITeamworkApiService, TeamworkApiService>(c => c.Timeout = TimeSpan.FromSeconds(60));
+            builder.Services.AddTransient<ITeamworkImportService, TeamworkImportService>();
 
 
             var app = builder.Build();

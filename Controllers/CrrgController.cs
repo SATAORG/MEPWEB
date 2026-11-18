@@ -29,9 +29,11 @@ namespace Mep01Web.Controllers
         private readonly UserScope _userScope;
         private readonly IRegistroRicaricheService _registroRicaricheService;
 		private readonly IOreQualificaService _oreQualificaService;
+		private readonly ICrrgTwService _crrgTwService;
 
-		public CrrgController(SataconsultingContext sataconsulting, ICrrgService crrgService, IHttpContextAccessor contextAccessor, UserScope userScope, IRegistroRicaricheService registroRicaricheService, IOreQualificaService oreQualificaService)
+		public CrrgController(SataconsultingContext sataconsulting, ICrrgService crrgService, IHttpContextAccessor contextAccessor, UserScope userScope, IRegistroRicaricheService registroRicaricheService, IOreQualificaService oreQualificaService, ICrrgTwService crrgTwService)
 		{
+			_crrgTwService = crrgTwService;
 			_db = sataconsulting;
 			_crrgService = crrgService;
 			_contextAccessor = contextAccessor;
@@ -84,6 +86,8 @@ namespace Mep01Web.Controllers
             IEnumerable<FlussoCrrg> objCrrgList = pluto.Body;
 
             obj.CrrgList = objCrrgList;
+            // [231009] Consuntivi importati da Teamwork: icona con il link al task nel report
+            ViewBag.TaskTeamwork = await _crrgTwService.GetTaskPerConsuntiviAsync((objCrrgList ?? Enumerable.Empty<FlussoCrrg>()).Select(c => c.CrrgCSrl));
             return View(obj);
         }
 
@@ -117,6 +121,8 @@ namespace Mep01Web.Controllers
 			IEnumerable<FlussoCrrg> objCrrgList = pluto.Body;
 
             obj.CrrgList = objCrrgList;
+            // [231009] Consuntivi importati da Teamwork: icona con il link al task nel report
+            ViewBag.TaskTeamwork = await _crrgTwService.GetTaskPerConsuntiviAsync((objCrrgList ?? Enumerable.Empty<FlussoCrrg>()).Select(c => c.CrrgCSrl));
             return View(obj);
         }
 
@@ -186,6 +192,10 @@ namespace Mep01Web.Controllers
 				{
 					ModelState.AddModelError("CrrgApp", addCrrgResponse.Errors[0].Message);
 				}
+				if (addCrrgResponse.Errors[0].Code == CrrgCreateErrors.CollegatoTeamwork)
+				{
+					ModelState.AddModelError(string.Empty, addCrrgResponse.Errors[0].Message);
+				}
 				if (addCrrgResponse.Errors[0].Code == CrrgCreateErrors.CrrgMod)
 				{
 					ModelState.AddModelError("CrrgMod", addCrrgResponse.Errors[0].Message);
@@ -193,6 +203,10 @@ namespace Mep01Web.Controllers
 
 				obj.Succeeded = "N";
 				await _crrgService.AddCrrgPrepareDataAsync(obj);
+				if (obj.IsUpdate)
+				{
+					await ImpostaCollegamentoTeamworkAsync(obj);
+				}
 				return View(obj);
             }
             else
@@ -261,6 +275,7 @@ namespace Mep01Web.Controllers
             {
                 obj.MemoModalita = "modIsl";
             }
+            await ImpostaCollegamentoTeamworkAsync(obj);
 
             return View("Create", obj);
         }
@@ -270,7 +285,22 @@ namespace Mep01Web.Controllers
         public async Task<ActionResult> Update(CrrgCreateRequest obj)
         {
             await Create(obj);
+            await ImpostaCollegamentoTeamworkAsync(obj);
             return View("Create", obj);
+        }
+
+        /// <summary>
+        /// [231009] Se il consuntivo è collegato a una registrazione Teamwork, la pagina di modifica blocca risorsa,
+        /// data, tempo e commessa/ISL e quella di cancellazione non permette di eliminarlo.
+        /// </summary>
+        private async Task ImpostaCollegamentoTeamworkAsync(CrrgCreateRequest obj)
+        {
+            if (obj.CrrgCSrl > 0)
+            {
+                var collegamento = await _crrgTwService.GetByCrrgCSrlAsync(obj.CrrgCSrl);
+                obj.TwTimelogId = collegamento?.TwTimelogId;
+                obj.TwTaskId = collegamento?.TwTaskId;
+            }
         }
 
 
@@ -307,6 +337,7 @@ namespace Mep01Web.Controllers
             }            
             CrrgCreateRequest obj = new CrrgCreateRequest((decimal)crrgCSrl);
 			await _crrgService.DeleteCrrgPrepareDataAsync(obj);
+			await ImpostaCollegamentoTeamworkAsync(obj);
 			return View(obj);
         }
 
@@ -316,7 +347,16 @@ namespace Mep01Web.Controllers
         public async Task<ActionResult> Delete(CrrgCreateRequest obj)
         {
 			var deleteCrrgResponse = await _crrgService.DeleteCrrgAsync(obj);
-			
+
+			if (deleteCrrgResponse != null && !deleteCrrgResponse.Succeeded
+				&& deleteCrrgResponse.Errors[0].Code == CrrgCreateErrors.CollegatoTeamwork)
+			{
+				ModelState.AddModelError(string.Empty, deleteCrrgResponse.Errors[0].Message);
+				await _crrgService.DeleteCrrgPrepareDataAsync(obj);
+				await ImpostaCollegamentoTeamworkAsync(obj);
+				return View(obj);
+			}
+
 			return RedirectToAction("IndexMantain");		
 			
         }

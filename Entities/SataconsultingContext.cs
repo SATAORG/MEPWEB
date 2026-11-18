@@ -22,6 +22,10 @@ public partial class SataconsultingContext : DbContext
 
     public virtual DbSet<FlussoCrrg> FlussoCrrgs { get; set; }
 
+    public virtual DbSet<FlussoCrrgTw> FlussoCrrgTws { get; set; }
+
+    public virtual DbSet<FlussoUsr1Tw> FlussoUsr1Tws { get; set; }
+
     public virtual DbSet<FlussoTatv> FlussoTatvs { get; set; }
 
     public virtual DbSet<FlussoTbcp> FlussoTbcps { get; set; }
@@ -5487,6 +5491,75 @@ public partial class SataconsultingContext : DbContext
 				.IsUnicode(false)
 				.HasColumnName("VIA_CLI_INT");
 		});
+
+        // [231009] Collegamento Registrazioni Teamwork / Consuntivi MEP
+        modelBuilder.Entity<FlussoCrrgTw>(entity =>
+        {
+            entity.HasKey(e => e.TwTimelogId).HasName("crtw_chiave");
+
+            entity.ToTable("flusso_crrg_tw", "dba");
+
+            entity.HasIndex(e => e.CrrgCSrl, "crtw_chiave_alt_1").IsUnique();
+
+            entity.HasIndex(e => e.TwTaskId, "crtw_chiave_alt_2");
+
+            entity.Property(e => e.TwTimelogId)
+                .ValueGeneratedNever()
+                .HasColumnName("tw_timelog_id");
+            entity.Property(e => e.CrrgCSrl)
+                .HasColumnType("numeric(12, 0)")
+                .HasColumnName("crrg_c_srl");
+            entity.Property(e => e.TwTaskId)
+                .HasColumnName("tw_task_id");
+            entity.Property(e => e.TwMinutes)
+                .HasColumnName("tw_minutes");
+            entity.Property(e => e.TwDate)
+                .HasPrecision(0)
+                .HasColumnName("tw_date");
+            entity.Property(e => e.TwCommessa)
+                .HasMaxLength(50)
+                .IsUnicode(false)
+                .HasColumnName("tw_commessa");
+            entity.Property(e => e.TwDescrizioneReg)
+                .HasMaxLength(2000)
+                .HasColumnName("tw_descrizione_reg");
+            entity.Property(e => e.TwUpdatedAt)
+                .HasPrecision(0)
+                .HasColumnName("tw_updated_at");
+            entity.Property(e => e.Sigla)
+                .HasMaxLength(5)
+                .IsUnicode(false)
+                .HasColumnName("sigla");
+        });
+
+        // [231009] Account Teamwork collegati agli utenti MEPWEB
+        modelBuilder.Entity<FlussoUsr1Tw>(entity =>
+        {
+            entity.HasKey(e => e.Usr1CSrl).HasName("usr1tw_chiave");
+
+            entity.ToTable("flusso_usr1_tw", "dba");
+
+            entity.Property(e => e.Usr1CSrl)
+                .ValueGeneratedNever()
+                .HasColumnType("numeric(12, 0)")
+                .HasColumnName("usr1_c_srl");
+            entity.Property(e => e.TwUserId)
+                .HasColumnName("tw_user_id");
+            entity.Property(e => e.TwApiEndpoint)
+                .HasMaxLength(200)
+                .IsUnicode(false)
+                .HasColumnName("tw_api_endpoint");
+            entity.Property(e => e.TwAccessToken)
+                .HasMaxLength(2000)
+                .IsUnicode(false)
+                .HasColumnName("tw_access_token");
+            entity.Property(e => e.DtIns)
+                .HasColumnType("datetime")
+                .HasColumnName("dt_ins");
+            entity.Property(e => e.DtUm)
+                .HasColumnType("datetime")
+                .HasColumnName("dt_um");
+        });
 
 		OnModelCreatingPartial(modelBuilder);
     }

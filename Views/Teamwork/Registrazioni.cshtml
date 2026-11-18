@@ -1,0 +1,103 @@
+@model MepWeb.DTO.Response.TwAnteprimaResponse
+@{
+    ViewData["Title"] = "Importa da Teamwork";
+}
+
+<style>
+    /* [231009] Liste lunghe nella modale di esito: al massimo ~5 righe, poi scroll */
+    .tw-lista-scroll { max-height: 9.5rem; overflow-y: auto; }
+    /* Caricamento: griglie attenuate e spinner centrato sopra, pulsante Aggiorna con spinner interno */
+    #tw-area { position: relative; min-height: 6rem; }
+    #tw-overlay { display: none; position: absolute; inset: 0; justify-content: center; align-items: flex-start; padding-top: 3rem; z-index: 5; }
+    #tw-area.tw-occupato #tw-griglie { opacity: .4; pointer-events: none; transition: opacity .15s; }
+    #tw-area.tw-occupato #tw-overlay { display: flex; }
+</style>
+
+@* main-mep-container scrolling-container: il body non scorre (site.css), scorre il contenitore come nelle altre pagine *@
+<div class="main-mep-container scrolling-container">
+<div class="p-3">
+    <div class="row pb-2">
+        <h2 class="text-primary">Importa da Teamwork</h2>
+        <p class="text-muted mb-0">Le tue registrazioni Teamwork del periodo: completa operazione, causale e macroattività, seleziona le righe e importale come consuntivi.</p>
+        <hr />
+    </div>
+
+    <form method="get" asp-action="Registrazioni" id="tw-form-periodo" class="row g-2 align-items-end mb-4">
+        <div class="col-auto">
+            <label class="form-label" for="dal">Dal</label>
+            <input class="form-control" type="date" id="dal" name="dal" value="@Model.Dal.ToString("yyyy-MM-dd")" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label" for="al">Al</label>
+            <input class="form-control" type="date" id="al" name="al" value="@Model.Al.ToString("yyyy-MM-dd")" />
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary d-inline-flex align-items-center gap-2" id="tw-btn-aggiorna">
+                <span id="tw-spinner" class="spinner-border spinner-border-sm d-none" aria-hidden="true"></span>
+                <span>Aggiorna</span>
+            </button>
+        </div>
+    </form>
+
+    <div id="tw-area">
+        <div id="tw-overlay" role="status" aria-live="polite">
+            <div class="d-flex align-items-center gap-2 px-3 py-2 rounded bg-dark text-light shadow">
+                <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                <span>Caricamento…</span>
+            </div>
+        </div>
+        <div id="tw-griglie" data-url-griglie="@Url.Action("Griglie")">
+            <partial name="_Griglie" model="Model" />
+        </div>
+    </div>
+</div>
+</div>
+
+@* Esito dell'import *@
+<div class="modal fade" id="tw-modal-esito" tabindex="-1" aria-labelledby="tw-modal-esito-titolo" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="tw-modal-esito-titolo">Esito dell'import</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Chiudi"></button>
+            </div>
+            <div class="modal-body">
+                <div id="tw-esito-importate" class="d-none">
+                    <h6>Consuntivi importati <span class="badge text-bg-success" id="tw-esito-importate-n"></span></h6>
+                    <ul class="tw-lista-scroll list-unstyled mb-3" id="tw-esito-importate-lista"></ul>
+                </div>
+                <div id="tw-esito-errori" class="d-none">
+                    <h6 class="text-danger">Non importate <span class="badge text-bg-danger" id="tw-esito-errori-n"></span></h6>
+                    <ul class="tw-lista-scroll mb-0" id="tw-esito-errori-lista"></ul>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Chiudi</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Conferma delle azioni irreversibili *@
+<div class="modal fade" id="tw-modal-conferma" tabindex="-1" aria-labelledby="tw-modal-conferma-titolo" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="tw-modal-conferma-titolo">Conferma</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Chiudi"></button>
+            </div>
+            <div class="modal-body"><p class="mb-0" id="tw-conferma-testo" style="white-space: pre-line"></p></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
+                <button type="button" class="btn btn-danger" id="tw-conferma-ok">Elimina</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Notifiche brevi per le azioni singole *@
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="tw-toast-container"></div>
+
+@section Scripts {
+    <script src="~/js/TeamworkImport.js" asp-append-version="true"></script>
+}

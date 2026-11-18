@@ -48,6 +48,7 @@
                                 </a>
                                 <ul class="dropdown-menu">
                                     <li><a class="dropdown-item" asp-area="" asp-controller="Crrg" asp-action="Create">Inserimento consuntivo</a></li>
+                                    <li><a class="dropdown-item" asp-area="" asp-controller="Teamwork" asp-action="Registrazioni">Importa da Teamwork</a></li>
                                     <li><a class="dropdown-item" asp-area="" asp-controller="Crrg" asp-action="Index">Report</a></li>
                                 </ul>
                             </li>
@@ -91,6 +92,8 @@
                                 @(_userScope.SV_USR_EMAIL + "(" + _userScope.SV_USR_SIGLA + ")")
                             </button>
                             <ul class="dropdown-menu">
+                                @* [231009] Teamwork: stato del collegamento (qui andrà anche la voce della pagina di import) *@
+                                @await Component.InvokeAsync("TeamworkStato")
                                 <li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#logout-modal">Logout</button></li>
                             </ul>
                         </div>
